@@ -1,9 +1,9 @@
-const serverlessExpress = require('@vendia/serverless-express')
+// const serverlessExpress = require('@vendia/serverless-express')
 const app = require('express')()
 
-app.use('/health', (req, res) => res.send({"status":"ok"}));
+app.get('/health', (req, res) => res.send({"status":"ok"}));
 
-app.listen(3000)
+app.listen(3000, () => console.log('listening on http://localhost:3000'))
 
 
-exports.handler = serverlessExpress({ app })
+// exports.handler = serverlessExpress({ app }) // これはLambda用
