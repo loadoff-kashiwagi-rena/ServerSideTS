@@ -7,7 +7,8 @@ const pool = mysql.createPool({
     host: '127.0.0.1',
     port: 3306,
     password: 'password',
-    database: 'mysql'
+    database: 'handson',
+    user: 'root',
 })
 
 app.use(express.json());
@@ -19,9 +20,19 @@ app.get('/users', async (req, res) => {
     res.send(rows)
 });
 
-app.get('/users/:id', (req, res) => res.send({ id: req.params.id}));
+app.get('/users/:id',  async (req, res) => {
+    const [ rows ] = await pool.query('SELECT id, name FROM users WHERE id = ?', [req.params.id])
+    if (rows[0]) {
+        res.send(rows[0])
+    } else {
+        res.status(404).send({ message: 'Not found' })
+    }
+});
 
-app.post('/users', (req, res) => res.send(req.body));
+app.post('/users', async (req, res) => {
+    const [ result ] = await pool.query('INSERT INTO users (name) VALUES (?)', [req.body.name])
+    res.status(201).send({ id: result.insertId, name: req.body.name })
+});
 
 
 if (require.main === module) {
