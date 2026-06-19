@@ -2,12 +2,22 @@
 const express = require('express')
 const app = express();
 const serverless = require('serverless-http')
+const mysql = require('mysql2/promise')
+const pool = mysql.createPool({
+    host: '127.0.0.1',
+    port: 3306,
+    password: 'password',
+    database: 'mysql'
+})
 
 app.use(express.json());
 
 app.get('/health', (req, res) => res.send({"status":"ok"}));
 
-app.get('/users', (req, res) => res.send([{ id: 1, name: "alice" }, { id: 2, name: "bob" }]));
+app.get('/users', async (req, res) => {
+    const [ rows ] = await pool.query('SELECT id, name FROM users')
+    res.send(rows)
+});
 
 app.get('/users/:id', (req, res) => res.send({ id: req.params.id}));
 

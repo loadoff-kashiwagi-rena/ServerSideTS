@@ -1,0 +1,23 @@
+services:
+  mysql:
+    image: mysql:8
+    container_name: handson-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: handson
+    ports:
+      - "3306:3306"
+    volumes:
+      # 初回起動時、このフォルダ内の .sql / .sh が自動実行される（テーブル作成＆初期データ投入）
+      - ./init:/docker-entrypoint-initdb.d
+      # データを永続化（コンテナを消してもデータが残る）
+      - mysql-data:/var/lib/mysql
+    # コンテナが本当に応答するまで healthy にしない
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-ppassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql-data:
