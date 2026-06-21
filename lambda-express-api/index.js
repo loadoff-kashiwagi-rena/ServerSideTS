@@ -36,6 +36,20 @@ async function getPool() {
     return pool
 }
 
+function validateName(req, res, next) {
+    if (!req.body.name) {
+        return res.status(400).send({ message: 'name is required' })
+    }
+    next()
+}
+
+function validateId(req, res, next) {
+    if (isNaN(Number(req.params.id))) {
+        return res.status(400).send({ message: 'id must be a number' })
+    }
+    next()
+}
+
 app.use(express.json());
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
@@ -98,7 +112,7 @@ app.get('/users', async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.get('/users/:id',  async (req, res) => {
+app.get('/users/:id', validateId,  async (req, res) => {
     const [ rows ] = await (await getPool()).query('SELECT id, name FROM users WHERE id = ?', [req.params.id])
     if (rows[0]) {
         res.send(rows[0])
@@ -126,7 +140,7 @@ app.get('/users/:id',  async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/User'
  */
-app.post('/users', async (req, res) => {
+app.post('/users', validateName, async (req, res) => {
     const [ result ] = await (await getPool()).query('INSERT INTO users (name) VALUES (?)', [req.body.name])
     res.status(201).send({ id: result.insertId, name: req.body.name })
 });
@@ -158,7 +172,7 @@ app.post('/users', async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.put('/users/:id', async (req, res) => {
+app.put('/users/:id', validateName, validateId, async (req, res) => {
     const [ result ] = await (await getPool()).query('UPDATE users SET name = ? WHERE id = ?', [req.body.name, req.params.id])
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' })
@@ -183,7 +197,7 @@ app.put('/users/:id', async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.delete('/users/:id', async (req, res) => {
+app.delete('/users/:id', validateId, async (req, res) => {
     const [ result ] = await (await getPool()).query('DELETE FROM users WHERE id = ?', [req.params.id])
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' })
