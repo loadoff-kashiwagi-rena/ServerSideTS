@@ -49,6 +49,22 @@ app.post('/users', async (req, res) => {
     res.status(201).send({ id: result.insertId, name: req.body.name })
 });
 
+app.put('/users/:id', async (req, res) => {
+    const [ result ] = await (await getPool()).query('UPDATE users SET name = ? WHERE id = ?', [req.body.name, req.params.id])
+    if (result.affectedRows === 0) {
+        return res.status(404).send({ message: 'Not found' })
+    }
+    res.status(200).send({ id: req.params.id, name: req.body.name })
+})
+
+app.delete('/users/:id', async (req, res) => {
+    const [ result ] = await (await getPool()).query('DELETE FROM users WHERE id = ?', [req.params.id])
+    if (result.affectedRows === 0) {
+        return res.status(404).send({ message: 'Not found' })
+    }
+    res.status(204).send()
+})
+
 
 if (require.main === module) {
     app.listen(3000, () => console.log('listening on http://localhost:3000'))
