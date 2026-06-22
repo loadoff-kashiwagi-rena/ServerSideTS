@@ -1,0 +1,38 @@
+{
+  // 学習用の叩き台。各設定の意味はコメント参照。慣れたら調整してOK。
+  "compilerOptions": {
+    // 出力する JS の文法レベル。Lambda の Node 22 ランタイムは ES2022 を完全サポート。
+    "target": "ES2022",
+
+    // 出力するモジュール形式。nodenext は Node 本来の解決（package.json の "type" / "exports" を見る）に従う
+    // package.json に "type":"module" が無いため index.ts は CommonJS として出力される
+    // → serverless-http / exports.handler / require.main === module はそのまま動く。
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // import express from 'express' のような「デフォルトインポート」を CommonJS パッケージに対して許可。
+    // これが false だと import * as express ... と書く必要が出る。
+    "esModuleInterop": true,
+
+    // 型チェックを最大限に。学習目的では true 推奨（暗黙の any や null 漏れを検出）。
+    "strict": true,
+
+    // node_modules 内の型定義(.d.ts)はチェックしない。サードパーティ型の不整合ノイズを避けて高速化。
+    "skipLibCheck": true,
+
+    // 大文字小文字違いの import を禁止（mac はゆるいが Linux/Lambda は厳格なため事故予防）。
+    "forceConsistentCasingInFileNames": true,
+
+    // ビルド成果物の出力先。デプロイ時は dist/ を Lambda に上げる。
+    "outDir": "dist",
+    "rootDir": ".",
+
+    // スタックトレースを .ts の行番号で読めるようにする。
+    "sourceMap": true,
+
+    // import した JSON を型付きで読み込めるようにする（将来 swagger 等を分離したとき用）。
+    "resolveJsonModule": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
