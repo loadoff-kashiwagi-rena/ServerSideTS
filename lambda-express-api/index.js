@@ -21,6 +21,9 @@ const client = new SecretsManagerClient({
     credentials: fromIni({ profile: 'mvtk-refactoring' })
 })
 
+const wrap = (handler) => (req, res, next) => 
+    Promise.resolve(handler(req, res, next)).catch(next)
+
 let pool
 
 async function getSecret() {
@@ -37,7 +40,7 @@ async function getPool() {
 }
 
 function validateName(req, res, next) {
-    if (!req.body.name || !req.body.name.trim()) {
+    if (!req.body.name || typeof req.body.name !== 'string' || !req.body.name.trim()) {
         return res.status(400).send({ message: 'name is required' })
     }
     if (req.body.name.trim().length > 255) {
@@ -57,12 +60,6 @@ function validateId(req, res, next) {
 app.use(express.json());
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
-
-if (require.main === module) {
-    app.listen(3000, () => console.log('listening on http://localhost:3000'))
-} else {
-    exports.handler = serverless(app);
-}
 
 /**
  * @openapi
@@ -90,10 +87,10 @@ app.get('/health', (req, res) => res.send({"status":"ok"}));
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get('/users', async (req, res) => {
+app.get('/users', wrap(async (req, res) => {
     const [ rows ] = await (await getPool()).query('SELECT id, name FROM users')
     res.send(rows)
-});
+}));
 
 /**
  * @openapi
@@ -116,14 +113,14 @@ app.get('/users', async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.get('/users/:id', validateId,  async (req, res) => {
+app.get('/users/:id', validateId,  wrap(async (req, res) => {
     const [ rows ] = await (await getPool()).query('SELECT id, name FROM users WHERE id = ?', [req.params.id])
     if (rows[0]) {
         res.send(rows[0])
     } else {
         res.status(404).send({ message: 'Not found' })
     }
-});
+}));
 
 /**
  * @openapi
@@ -144,10 +141,10 @@ app.get('/users/:id', validateId,  async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/User'
  */
-app.post('/users', validateName, async (req, res) => {
+app.post('/users', validateName, wrap(async (req, res) => {
     const [ result ] = await (await getPool()).query('INSERT INTO users (name) VALUES (?)', [req.body.name])
     res.status(201).send({ id: result.insertId, name: req.body.name })
-});
+}));
 
 /**
  * @openapi
@@ -176,13 +173,13 @@ app.post('/users', validateName, async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.put('/users/:id', validateName, validateId, async (req, res) => {
+app.put('/users/:id', validateName, validateId, wrap(async (req, res) => {
     const [ result ] = await (await getPool()).query('UPDATE users SET name = ? WHERE id = ?', [req.body.name, req.params.id])
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' })
     }
     res.status(200).send({ id: req.params.id, name: req.body.name })
-})
+}))
 
 /**
  * @openapi
@@ -201,14 +198,18 @@ app.put('/users/:id', validateName, validateId, async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.delete('/users/:id', validateId, async (req, res) => {
+app.delete('/users/:id', validateId, wrap(async (req, res) => {
     const [ result ] = await (await getPool()).query('DELETE FROM users WHERE id = ?', [req.params.id])
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' })
     }
     res.status(204).send()
-})
+}))
 
+app.use((err, req, res, next) => {
+    console.error(err)
+    res.status(500).send({ message: 'Internal Server Error' })
+})
 
 if (require.main === module) {
     app.listen(3000, () => console.log('listening on http://localhost:3000'))
