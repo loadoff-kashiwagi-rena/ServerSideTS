@@ -42,6 +42,35 @@ async function getPool() {
     return pool
 }
 
+/**
+ * RDS内の複数クエリを1つのトランザクションでまとめて実行する。
+ * callback内が正常に終わればcommit、例外が投げられればrollbackする。
+ * 取得したコネクションはどの経路でも必ずreleaseされる。
+ *
+ * @example
+ * const id = await withTransaction(async (conn) => {
+ *     const [r] = await conn.query<ResultSetHeader>('INSERT INTO users (name) VALUES (?)', [name])
+ *     await conn.query('INSERT INTO profiles (user_id, url) VALUES (?, ?)', [r.insertId, url])
+ *     return r.insertId
+ * })
+ */
+async function withTransaction<T>(
+    callback: (conn: mysql.PoolConnection) => Promise<T>
+): Promise<T> {
+    const conn = await (await getPool()).getConnection()
+    try {
+        await conn.beginTransaction()
+        const result = await callback(conn)
+        await conn.commit()
+        return result
+    } catch (e) {
+        await conn.rollback()
+        throw e
+    } finally {
+        conn.release()
+    }
+}
+
 function validateName(req: Request, res: Response, next: NextFunction) {
     if (!req.body.name || typeof req.body.name !== 'string' || !req.body.name.trim()) {
         return res.status(400).send({ message: 'name is required' })
