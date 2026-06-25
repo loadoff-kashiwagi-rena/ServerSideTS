@@ -6,7 +6,7 @@ import swaggerUi from 'swagger-ui-express'
 import swaggerJsDoc from 'swagger-jsdoc'
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager'
 import { fromIni } from '@aws-sdk/credential-providers'
-const app = express();
+const app = express()
 
 const swaggerSpec = swaggerJsDoc({
     definition: {
@@ -18,11 +18,13 @@ const swaggerSpec = swaggerJsDoc({
 
 const client = new SecretsManagerClient({
     region: 'ap-northeast-1',
-    credentials: fromIni({ profile: 'mvtk-refactoring' })
+    credentials: fromIni({ profile: 'mvtk-refactoring' }),
 })
 
-const wrap = (handler: RequestHandler): RequestHandler => (req, res, next) =>
-    Promise.resolve(handler(req, res, next)).catch(next)
+const wrap =
+    (handler: RequestHandler): RequestHandler =>
+    (req, res, next) =>
+        Promise.resolve(handler(req, res, next)).catch(next)
 
 let pool: mysql.Pool | undefined
 
@@ -37,7 +39,14 @@ async function getSecret() {
         console.log(JSON.stringify({ level: 'info', event: 'getSecret.success', secretId }))
         return JSON.parse(response.SecretString)
     } catch (e) {
-        console.error(JSON.stringify({ level: 'error', event: 'getSecret.failed', secretId, error: String(e) }))
+        console.error(
+            JSON.stringify({
+                level: 'error',
+                event: 'getSecret.failed',
+                secretId,
+                error: String(e),
+            }),
+        )
         throw e
     }
 }
@@ -67,8 +76,11 @@ async function getPool() {
  *     return r.insertId
  * })
  */
+// 今後のトランザクション系エンドポイント（複数テーブルへの書き込み等）で使用予定。
+// 使い始めたらこの oxlint-disable は削除する。
+// oxlint-disable-next-line no-unused-vars
 async function withTransaction<T>(
-    callback: (conn: mysql.PoolConnection) => Promise<T>
+    callback: (conn: mysql.PoolConnection) => Promise<T>,
 ): Promise<T> {
     const conn = await (await getPool()).getConnection()
     try {
@@ -79,7 +91,9 @@ async function withTransaction<T>(
         return result
     } catch (e) {
         await conn.rollback()
-        console.error(JSON.stringify({ level: 'error', event: 'withTransaction.rollback', error: String(e) }))
+        console.error(
+            JSON.stringify({ level: 'error', event: 'withTransaction.rollback', error: String(e) }),
+        )
         throw e
     } finally {
         conn.release()
@@ -93,7 +107,7 @@ function validateName(req: Request, res: Response, next: NextFunction) {
     if (req.body.name.trim().length > 255) {
         return res.status(400).send({ message: 'name is too long' })
     }
-    next()
+    return next()
 }
 
 function validateId(req: Request, res: Response, next: NextFunction) {
@@ -101,22 +115,24 @@ function validateId(req: Request, res: Response, next: NextFunction) {
     if (isNaN(id) || !Number.isInteger(id) || id < 1) {
         return res.status(400).send({ message: 'id must be a number' })
     }
-    next()
+    return next()
 }
 
-app.use(express.json());
+app.use(express.json())
 
 app.use((req: Request, res: Response, next: NextFunction) => {
     const start = Date.now()
     res.on('finish', () => {
-        console.log(JSON.stringify({
-            level: 'info',
-            event: 'access',
-            method: req.method,
-            path: req.originalUrl,
-            status: res.statusCode,
-            durationMs: Date.now() - start,
-        }))
+        console.log(
+            JSON.stringify({
+                level: 'info',
+                event: 'access',
+                method: req.method,
+                path: req.originalUrl,
+                status: res.statusCode,
+                durationMs: Date.now() - start,
+            }),
+        )
     })
     next()
 })
@@ -132,7 +148,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
  *       200:
  *         description: OK
  */
-app.get('/health', (req, res) => res.send({"status":"ok"}));
+app.get('/health', (req, res) => res.send({ status: 'ok' }))
 
 /**
  * @openapi
@@ -149,10 +165,13 @@ app.get('/health', (req, res) => res.send({"status":"ok"}));
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get('/users', wrap(async (req, res) => {
-    const [ rows ] = await (await getPool()).query('SELECT id, name FROM users')
-    res.send(rows)
-}));
+app.get(
+    '/users',
+    wrap(async (req, res) => {
+        const [rows] = await (await getPool()).query('SELECT id, name FROM users')
+        res.send(rows)
+    }),
+)
 
 /**
  * @openapi
@@ -175,14 +194,20 @@ app.get('/users', wrap(async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.get('/users/:id', validateId,  wrap(async (req, res) => {
-    const [ rows ] = await (await getPool()).query<RowDataPacket[]>('SELECT id, name FROM users WHERE id = ?', [req.params.id])
-    if (rows[0]) {
-        res.send(rows[0])
-    } else {
-        res.status(404).send({ message: 'Not found' })
-    }
-}));
+app.get(
+    '/users/:id',
+    validateId,
+    wrap(async (req, res) => {
+        const [rows] = await (
+            await getPool()
+        ).query<RowDataPacket[]>('SELECT id, name FROM users WHERE id = ?', [req.params.id])
+        if (rows[0]) {
+            res.send(rows[0])
+        } else {
+            res.status(404).send({ message: 'Not found' })
+        }
+    }),
+)
 
 /**
  * @openapi
@@ -203,10 +228,16 @@ app.get('/users/:id', validateId,  wrap(async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/User'
  */
-app.post('/users', validateName, wrap(async (req, res) => {
-    const [ result ] = await (await getPool()).query<ResultSetHeader>('INSERT INTO users (name) VALUES (?)', [req.body.name])
-    res.status(201).send({ id: result.insertId, name: req.body.name })
-}));
+app.post(
+    '/users',
+    validateName,
+    wrap(async (req, res) => {
+        const [result] = await (
+            await getPool()
+        ).query<ResultSetHeader>('INSERT INTO users (name) VALUES (?)', [req.body.name])
+        res.status(201).send({ id: result.insertId, name: req.body.name })
+    }),
+)
 
 /**
  * @openapi
@@ -235,13 +266,23 @@ app.post('/users', validateName, wrap(async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.put('/users/:id', validateName, validateId, wrap(async (req, res) => {
-    const [ result ] = await (await getPool()).query<ResultSetHeader>('UPDATE users SET name = ? WHERE id = ?', [req.body.name, req.params.id])
-    if (result.affectedRows === 0) {
-        return res.status(404).send({ message: 'Not found' })
-    }
-    res.status(200).send({ id: req.params.id, name: req.body.name })
-}))
+app.put(
+    '/users/:id',
+    validateName,
+    validateId,
+    wrap(async (req, res) => {
+        const [result] = await (
+            await getPool()
+        ).query<ResultSetHeader>('UPDATE users SET name = ? WHERE id = ?', [
+            req.body.name,
+            req.params.id,
+        ])
+        if (result.affectedRows === 0) {
+            return res.status(404).send({ message: 'Not found' })
+        }
+        return res.status(200).send({ id: req.params.id, name: req.body.name })
+    }),
+)
 
 /**
  * @openapi
@@ -260,32 +301,39 @@ app.put('/users/:id', validateName, validateId, wrap(async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.delete('/users/:id', validateId, wrap(async (req, res) => {
-    const [ result ] = await (await getPool()).query<ResultSetHeader>('DELETE FROM users WHERE id = ?', [req.params.id])
-    if (result.affectedRows === 0) {
-        return res.status(404).send({ message: 'Not found' })
-    }
-    res.status(204).send()
-}))
+app.delete(
+    '/users/:id',
+    validateId,
+    wrap(async (req, res) => {
+        const [result] = await (
+            await getPool()
+        ).query<ResultSetHeader>('DELETE FROM users WHERE id = ?', [req.params.id])
+        if (result.affectedRows === 0) {
+            return res.status(404).send({ message: 'Not found' })
+        }
+        return res.status(204).send()
+    }),
+)
 
-app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
-    console.error(JSON.stringify({
-        level: 'error',
-        event: 'unhandledError',
-        method: req.method,
-        path: req.originalUrl,
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-    }))
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    console.error(
+        JSON.stringify({
+            level: 'error',
+            event: 'unhandledError',
+            method: req.method,
+            path: req.originalUrl,
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+        }),
+    )
     res.status(500).send({ message: 'Internal Server Error' })
 })
 
 if (require.main === module) {
     app.listen(3000, () => console.log('listening on http://localhost:3000'))
 } else {
-    exports.handler = serverLess(app);
+    exports.handler = serverLess(app)
 }
-
 
 // exports.handler = serverlessExpress({ app }) // これはLambda用
 
