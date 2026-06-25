@@ -45,7 +45,7 @@ flowchart LR
 
 > ⚡ **画像 / mp4 の保存フロー**
 > 1. クライアントが Lambda に「アップロード用 URL ください」とリクエスト（API Gateway 経由）。
-> 2. Lambda が S3 に対する **Presigned URL（署名付き URL）** を発行して返す。
+> 2. Lambda が S3 に対する **Presigned URL（プリサインド ユーアールエル、署名付き URL）** を発行して返す。
 > 3. クライアントはその URL を使って **S3 へファイル本体を直接 PUT**（Lambda を経由しないので、Lambda のペイロード上限やタイムアウトの影響を受けない）。
 
 ---
