@@ -27,19 +27,32 @@ const wrap = (handler: RequestHandler): RequestHandler => (req, res, next) =>
 let pool: mysql.Pool | undefined
 
 async function getSecret() {
-    const command = new GetSecretValueCommand({ SecretId: 'handson/db'})
-    const response = await client.send(command)
-    if (!response.SecretString) {
-        throw new Error('SecretString is empty')
+    const secretId = 'handson/db'
+    try {
+        const command = new GetSecretValueCommand({ SecretId: secretId })
+        const response = await client.send(command)
+        if (!response.SecretString) {
+            throw new Error('SecretString is empty')
+        }
+        console.log(JSON.stringify({ level: 'info', event: 'getSecret.success', secretId }))
+        return JSON.parse(response.SecretString)
+    } catch (e) {
+        console.error(JSON.stringify({ level: 'error', event: 'getSecret.failed', secretId, error: String(e) }))
+        throw e
     }
-    return JSON.parse(response.SecretString)
 }
 
 async function getPool() {
     if (pool) return pool
-    const secret = await getSecret()
-    pool = mysql.createPool(secret)
-    return pool
+    try {
+        const secret = await getSecret()
+        pool = mysql.createPool(secret)
+        console.log(JSON.stringify({ level: 'info', event: 'getPool.created' }))
+        return pool
+    } catch (e) {
+        console.error(JSON.stringify({ level: 'error', event: 'getPool.failed', error: String(e) }))
+        throw e
+    }
 }
 
 /**
@@ -62,9 +75,11 @@ async function withTransaction<T>(
         await conn.beginTransaction()
         const result = await callback(conn)
         await conn.commit()
+        console.log(JSON.stringify({ level: 'info', event: 'withTransaction.commit' }))
         return result
     } catch (e) {
         await conn.rollback()
+        console.error(JSON.stringify({ level: 'error', event: 'withTransaction.rollback', error: String(e) }))
         throw e
     } finally {
         conn.release()
@@ -90,6 +105,21 @@ function validateId(req: Request, res: Response, next: NextFunction) {
 }
 
 app.use(express.json());
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+    const start = Date.now()
+    res.on('finish', () => {
+        console.log(JSON.stringify({
+            level: 'info',
+            event: 'access',
+            method: req.method,
+            path: req.originalUrl,
+            status: res.statusCode,
+            durationMs: Date.now() - start,
+        }))
+    })
+    next()
+})
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 
@@ -239,7 +269,14 @@ app.delete('/users/:id', validateId, wrap(async (req, res) => {
 }))
 
 app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
-    console.error(err)
+    console.error(JSON.stringify({
+        level: 'error',
+        event: 'unhandledError',
+        method: req.method,
+        path: req.originalUrl,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+    }))
     res.status(500).send({ message: 'Internal Server Error' })
 })
 
