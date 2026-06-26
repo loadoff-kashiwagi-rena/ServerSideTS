@@ -5,14 +5,45 @@ import { Construct } from 'constructs'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as iam from 'aws-cdk-lib/aws-iam'
+import * as ec2 from 'aws-cdk-lib/aws-ec2'
 
 // Express アプリ（serverless-http 済み）のディレクトリ。
 // dist/index.handler が Lambda のエントリポイント。
 const APP_DIR = path.join(__dirname, '..', '..', 'lambda-express-api')
 
+// --- 既存（手動作成済み）のネットワーク資源 -------------------------------------
+// VPC / サブネット / セキュリティグループ / RDS Proxy / Secret はハンズオンで
+// マネジメントコンソール側に作成済み。CDK では「作る」のではなく既存IDを
+// インポートして Lambda に付け替えるだけにする（新規作成すると Proxy SG の
+// インバウンド許可が Lambda SG を名指ししているため接続が壊れる）。
+const VPC_ID = 'vpc-0a06e9131f00316ec'
+// Lambda を置くサブネット（現状の構成をそのまま再現）。
+//   subnet-0de1fb012fd66ce60 = ap-northeast-1a（パブリック）
+//   subnet-0c6a14ba71f893b3c = ap-northeast-1c（プライベート）
+// ※本来はプライベート2つが綺麗。整理する場合は 1a 側を private(subnet-004a44a992a6b4754) に寄せる。
+const LAMBDA_SUBNET_IDS = ['subnet-0de1fb012fd66ce60', 'subnet-0c6a14ba71f893b3c']
+const LAMBDA_AZS = ['ap-northeast-1a', 'ap-northeast-1c']
+// handson-lambda-sg。Proxy SG(handson-proxy-sg) が 3306 をこの SG から許可している。
+const LAMBDA_SG_ID = 'sg-0def3f09d79677051'
+
 export class LambdaExpressApiStack extends Stack {
     constructor(scope: Construct, id: string, props?: StackProps) {
         super(scope, id, props)
+
+        // --- 既存ネットワークのインポート（新規作成しない） ----------------------
+        // fromVpcAttributes / fromSubnetId / fromSecurityGroupId はいずれも
+        // 「既存IDを参照するだけ」で、CloudFormation 上にリソースを作らない。
+        const vpc = ec2.Vpc.fromVpcAttributes(this, 'HandsonVpc', {
+            vpcId: VPC_ID,
+            availabilityZones: LAMBDA_AZS,
+        })
+        const lambdaSubnets = LAMBDA_SUBNET_IDS.map((subnetId, i) =>
+            ec2.Subnet.fromSubnetId(this, `LambdaSubnet${i}`, subnetId),
+        )
+        // mutable: false で既存SGを書き換えない（egress は既に全許可済み）。
+        const lambdaSg = ec2.SecurityGroup.fromSecurityGroupId(this, 'LambdaSg', LAMBDA_SG_ID, {
+            mutable: false,
+        })
 
         // --- Lambda 本体 ---------------------------------------------------------
         // TypeScript を tsc でビルドした dist/ と、本番 node_modules を zip して載せる。
@@ -24,6 +55,13 @@ export class LambdaExpressApiStack extends Stack {
             handler: 'dist/index.handler',
             memorySize: 512,
             timeout: Duration.seconds(30),
+            // RDS Proxy は VPC 内にしかいないため、Lambda も同じ VPC に入れる。
+            // これにより Lambda → RDS Proxy(3306) → RDS の経路が通る。
+            // VPC に入れると CDK が ENI 管理用の AWSLambdaVPCAccessExecutionRole を
+            // 実行ロールへ自動付与する。
+            vpc,
+            vpcSubnets: { subnets: lambdaSubnets },
+            securityGroups: [lambdaSg],
             code: lambda.Code.fromAsset(APP_DIR, {
                 bundling: {
                     // フォールバック（ローカルが使えない時のみ Docker で実行）
