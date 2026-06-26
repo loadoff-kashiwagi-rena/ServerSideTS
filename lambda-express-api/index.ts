@@ -16,9 +16,12 @@ const swaggerSpec = swaggerJsDoc({
     apis: [__filename],
 })
 
+// Lambda 上では実行ロールの認証情報を使う（環境変数 AWS_LAMBDA_FUNCTION_NAME で判定）。
+// ローカルでは ~/.aws のプロファイルを使う。
+const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME
 const client = new SecretsManagerClient({
     region: 'ap-northeast-1',
-    credentials: fromIni({ profile: 'mvtk-refactoring' }),
+    ...(isLambda ? {} : { credentials: fromIni({ profile: 'mvtk-refactoring' }) }),
 })
 
 const wrap =

@@ -19,26 +19,82 @@ const swaggerSpec = (0, swagger_jsdoc_1.default)({
     },
     apis: [__filename],
 });
+// Lambda 上では実行ロールの認証情報を使う（環境変数 AWS_LAMBDA_FUNCTION_NAME で判定）。
+// ローカルでは ~/.aws のプロファイルを使う。
+const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 const client = new client_secrets_manager_1.SecretsManagerClient({
     region: 'ap-northeast-1',
-    credentials: (0, credential_providers_1.fromIni)({ profile: 'mvtk-refactoring' })
+    ...(isLambda ? {} : { credentials: (0, credential_providers_1.fromIni)({ profile: 'mvtk-refactoring' }) }),
 });
 const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 let pool;
 async function getSecret() {
-    const command = new client_secrets_manager_1.GetSecretValueCommand({ SecretId: 'handson/db' });
-    const response = await client.send(command);
-    if (!response.SecretString) {
-        throw new Error('SecretString is empty');
+    const secretId = 'handson/db';
+    try {
+        const command = new client_secrets_manager_1.GetSecretValueCommand({ SecretId: secretId });
+        const response = await client.send(command);
+        if (!response.SecretString) {
+            throw new Error('SecretString is empty');
+        }
+        console.log(JSON.stringify({ level: 'info', event: 'getSecret.success', secretId }));
+        return JSON.parse(response.SecretString);
     }
-    return JSON.parse(response.SecretString);
+    catch (e) {
+        console.error(JSON.stringify({
+            level: 'error',
+            event: 'getSecret.failed',
+            secretId,
+            error: String(e),
+        }));
+        throw e;
+    }
 }
 async function getPool() {
     if (pool)
         return pool;
-    const secret = await getSecret();
-    pool = promise_1.default.createPool(secret);
-    return pool;
+    try {
+        const secret = await getSecret();
+        pool = promise_1.default.createPool(secret);
+        console.log(JSON.stringify({ level: 'info', event: 'getPool.created' }));
+        return pool;
+    }
+    catch (e) {
+        console.error(JSON.stringify({ level: 'error', event: 'getPool.failed', error: String(e) }));
+        throw e;
+    }
+}
+/**
+ * RDS内の複数クエリを1つのトランザクションでまとめて実行する。
+ * callback内が正常に終わればcommit、例外が投げられればrollbackする。
+ * 取得したコネクションはどの経路でも必ずreleaseされる。
+ *
+ * @example
+ * const id = await withTransaction(async (conn) => {
+ *     const [r] = await conn.query<ResultSetHeader>('INSERT INTO users (name) VALUES (?)', [name])
+ *     await conn.query('INSERT INTO profiles (user_id, url) VALUES (?, ?)', [r.insertId, url])
+ *     return r.insertId
+ * })
+ */
+// 今後のトランザクション系エンドポイント（複数テーブルへの書き込み等）で使用予定。
+// 使い始めたらこの oxlint-disable は削除する。
+// oxlint-disable-next-line no-unused-vars
+async function withTransaction(callback) {
+    const conn = await (await getPool()).getConnection();
+    try {
+        await conn.beginTransaction();
+        const result = await callback(conn);
+        await conn.commit();
+        console.log(JSON.stringify({ level: 'info', event: 'withTransaction.commit' }));
+        return result;
+    }
+    catch (e) {
+        await conn.rollback();
+        console.error(JSON.stringify({ level: 'error', event: 'withTransaction.rollback', error: String(e) }));
+        throw e;
+    }
+    finally {
+        conn.release();
+    }
 }
 function validateName(req, res, next) {
     if (!req.body.name || typeof req.body.name !== 'string' || !req.body.name.trim()) {
@@ -47,16 +103,30 @@ function validateName(req, res, next) {
     if (req.body.name.trim().length > 255) {
         return res.status(400).send({ message: 'name is too long' });
     }
-    next();
+    return next();
 }
 function validateId(req, res, next) {
     const id = Number(req.params.id);
     if (isNaN(id) || !Number.isInteger(id) || id < 1) {
         return res.status(400).send({ message: 'id must be a number' });
     }
-    next();
+    return next();
 }
 app.use(express_1.default.json());
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        console.log(JSON.stringify({
+            level: 'info',
+            event: 'access',
+            method: req.method,
+            path: req.originalUrl,
+            status: res.statusCode,
+            durationMs: Date.now() - start,
+        }));
+    });
+    next();
+});
 app.use('/api-docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.default.setup(swaggerSpec));
 /**
  * @openapi
@@ -67,7 +137,7 @@ app.use('/api-docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.de
  *       200:
  *         description: OK
  */
-app.get('/health', (req, res) => res.send({ "status": "ok" }));
+app.get('/health', (req, res) => res.send({ status: 'ok' }));
 /**
  * @openapi
  * /users:
@@ -168,11 +238,14 @@ app.post('/users', validateName, wrap(async (req, res) => {
  *         description: Not found
  */
 app.put('/users/:id', validateName, validateId, wrap(async (req, res) => {
-    const [result] = await (await getPool()).query('UPDATE users SET name = ? WHERE id = ?', [req.body.name, req.params.id]);
+    const [result] = await (await getPool()).query('UPDATE users SET name = ? WHERE id = ?', [
+        req.body.name,
+        req.params.id,
+    ]);
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' });
     }
-    res.status(200).send({ id: req.params.id, name: req.body.name });
+    return res.status(200).send({ id: req.params.id, name: req.body.name });
 }));
 /**
  * @openapi
@@ -196,10 +269,17 @@ app.delete('/users/:id', validateId, wrap(async (req, res) => {
     if (result.affectedRows === 0) {
         return res.status(404).send({ message: 'Not found' });
     }
-    res.status(204).send();
+    return res.status(204).send();
 }));
-app.use((err, req, res, next) => {
-    console.error(err);
+app.use((err, req, res, _next) => {
+    console.error(JSON.stringify({
+        level: 'error',
+        event: 'unhandledError',
+        method: req.method,
+        path: req.originalUrl,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+    }));
     res.status(500).send({ message: 'Internal Server Error' });
 });
 if (require.main === module) {
