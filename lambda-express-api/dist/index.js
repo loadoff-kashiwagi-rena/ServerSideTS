@@ -126,6 +126,18 @@ function validateId(req, res, next) {
     return next();
 }
 app.use(express_1.default.json());
+// CORS: 別オリジン（mitai の Nuxt 開発サーバ）からの呼び出しを許可する。
+// 検証用にローカルの Nuxt(http://localhost:3001) のみ許可。本番では実オリジンに置き換える。
+const ALLOWED_ORIGIN = 'http://localhost:3001';
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    // プリフライト(OPTIONS)はここで完結させ、本体処理には進ませない。
+    if (req.method === 'OPTIONS')
+        return res.sendStatus(204);
+    return next();
+});
 app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
