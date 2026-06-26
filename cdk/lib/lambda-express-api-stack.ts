@@ -17,11 +17,13 @@ const APP_DIR = path.join(__dirname, '..', '..', 'lambda-express-api')
 // インポートして Lambda に付け替えるだけにする（新規作成すると Proxy SG の
 // インバウンド許可が Lambda SG を名指ししているため接続が壊れる）。
 const VPC_ID = 'vpc-0a06e9131f00316ec'
-// Lambda を置くサブネット（現状の構成をそのまま再現）。
-//   subnet-0de1fb012fd66ce60 = ap-northeast-1a（パブリック）
-//   subnet-0c6a14ba71f893b3c = ap-northeast-1c（プライベート）
-// ※本来はプライベート2つが綺麗。整理する場合は 1a 側を private(subnet-004a44a992a6b4754) に寄せる。
-const LAMBDA_SUBNET_IDS = ['subnet-0de1fb012fd66ce60', 'subnet-0c6a14ba71f893b3c']
+// Lambda を置くサブネット（プライベート2つに統一）。
+//   subnet-004a44a992a6b4754 = ap-northeast-1a（プライベート / 0.0.0.0/0 → NAT）
+//   subnet-0c6a14ba71f893b3c = ap-northeast-1c（プライベート / 0.0.0.0/0 → NAT）
+// 以前は 1a 側にパブリックサブネット(subnet-0de1fb012fd66ce60)を使っていたが、
+// Lambda の ENI はパブリックIPを持たず IGW 経由で外（Secrets Manager）へ出られないため
+// /users が断続的にタイムアウトしていた。両方プライベートにして NAT 経由で到達させる。
+const LAMBDA_SUBNET_IDS = ['subnet-004a44a992a6b4754', 'subnet-0c6a14ba71f893b3c']
 const LAMBDA_AZS = ['ap-northeast-1a', 'ap-northeast-1c']
 // handson-lambda-sg。Proxy SG(handson-proxy-sg) が 3306 をこの SG から許可している。
 const LAMBDA_SG_ID = 'sg-0def3f09d79677051'
