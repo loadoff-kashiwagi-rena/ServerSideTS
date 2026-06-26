@@ -167,13 +167,14 @@ app.get('/health', (req, res) => res.send({ status: 'ok' }));
  * @openapi
  * /uploads/presign:
  *   post:
- *     summary: mp4アップロード用の presigned URL を発行
+ *     summary: mp4アップロード用の presigned URL を発行（一時領域 temp/ 向け）
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required: [filename]
  *             properties:
  *               filename:
  *                 type: string
@@ -186,18 +187,106 @@ app.post('/uploads/presign', wrap(async (req, res) => {
     if (!filename || typeof filename !== 'string' || !filename.trim()) {
         return res.status(400).send({ message: 'filename is required' });
     }
-    // S3 内での保存先（キー）。uploads/ 配下にまとめる。
-    const key = `uploads/${filename.trim()}`;
-    // 「このバケットに、このキーで、video/mp4 を PUT してよい」という許可。
+    if (/[/\\]/.test(filename) || filename === '.' || filename === '..') {
+        return res.status(400).send({ message: 'invalid filename' });
+    }
+    // 一時領域（temp/）へアップロードさせる。バリデーション後に uploads/ へ移動する。
+    const key = `temp/${filename.trim()}`;
     const command = new client_s3_1.PutObjectCommand({
         Bucket: UPLOAD_BUCKET,
         Key: key,
         ContentType: 'video/mp4',
     });
-    // 300秒だけ有効な署名付き PUT URL。クライアントはこのURLへ直接アップロードする。
     const url = await (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 });
     console.log(JSON.stringify({ level: 'info', event: 'presign.issued', key }));
-    res.send({ url, key, expiresIn: 300 });
+    return res.send({ url, key, expiresIn: 300 });
+}));
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+/**
+ * @openapi
+ * /uploads/complete:
+ *   post:
+ *     summary: アップロード完了通知。バリデーション後に本番領域へ移動し RDS に保存する
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [key, user_id]
+ *             properties:
+ *               key:
+ *                 type: string
+ *                 example: temp/sample.mp4
+ *               user_id:
+ *                 type: integer
+ *                 example: 1
+ *     responses:
+ *       201:
+ *         description: 保存成功
+ *       400:
+ *         description: バリデーション失敗（temp ファイルは削除済み）
+ *       404:
+ *         description: temp にファイルが存在しない
+ */
+app.post('/uploads/complete', wrap(async (req, res) => {
+    const { key, user_id } = req.body ?? {};
+    if (!key || typeof key !== 'string' || !key.startsWith('temp/')) {
+        return res.status(400).send({ message: 'key must start with temp/' });
+    }
+    if (!Number.isInteger(user_id) || user_id < 1) {
+        return res.status(400).send({ message: 'user_id must be a positive integer' });
+    }
+    const filename = key.slice('temp/'.length);
+    const destKey = `uploads/${filename}`;
+    // S3 からファイルのメタデータを取得（ファイルが存在するか・サイズ・Content-Type）
+    let head;
+    try {
+        head = await s3.send(new client_s3_1.HeadObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key }));
+    }
+    catch {
+        return res.status(404).send({ message: 'file not found in temp storage' });
+    }
+    const fileSize = head.ContentLength ?? 0;
+    const contentType = head.ContentType ?? '';
+    // バリデーション失敗時は temp を削除してから 400 を返す
+    if (fileSize === 0 || fileSize > MAX_FILE_SIZE) {
+        await s3.send(new client_s3_1.DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key }));
+        console.log(JSON.stringify({ level: 'warn', event: 'complete.invalid_size', key, fileSize }));
+        return res.status(400).send({ message: `file size invalid (got ${fileSize} bytes, max ${MAX_FILE_SIZE})` });
+    }
+    if (contentType !== 'video/mp4') {
+        await s3.send(new client_s3_1.DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key }));
+        console.log(JSON.stringify({ level: 'warn', event: 'complete.invalid_type', key, contentType }));
+        return res.status(400).send({ message: `content type must be video/mp4 (got ${contentType})` });
+    }
+    // 本番領域（uploads/）へコピー
+    await s3.send(new client_s3_1.CopyObjectCommand({
+        Bucket: UPLOAD_BUCKET,
+        CopySource: `${UPLOAD_BUCKET}/${key}`,
+        Key: destKey,
+    }));
+    // RDS に保存。失敗時は temp と uploads/ の両方を削除してロールバックする。
+    try {
+        await (await getPool()).query('INSERT INTO uploads (user_id, filename, s3_key, file_size) VALUES (?, ?, ?, ?)', [user_id, filename, destKey, fileSize]);
+    }
+    catch (e) {
+        // INSERT 失敗時は uploads/ にコピー済みのファイルと temp を両方削除する
+        await Promise.allSettled([
+            s3.send(new client_s3_1.DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: destKey })),
+            s3.send(new client_s3_1.DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })),
+        ]);
+        console.error(JSON.stringify({ level: 'error', event: 'complete.insert_failed', key, error: String(e) }));
+        // 外部キー制約違反（user_id が存在しない）は 400、それ以外は 500
+        const isFK = e instanceof Error && e.message.includes('foreign key constraint');
+        return res.status(isFK ? 400 : 500).send({
+            message: isFK ? 'user_id does not exist' : 'Internal Server Error',
+        });
+    }
+    // 一時ファイルを削除（失敗しても成功扱い。ファイルは uploads/ に保存済み）
+    await s3.send(new client_s3_1.DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })).catch((e) => console.error(JSON.stringify({ level: 'error', event: 'complete.delete_temp_failed', key, error: String(e) })));
+    console.log(JSON.stringify({ level: 'info', event: 'complete.success', destKey, fileSize }));
+    return res.status(201).send({ key: destKey, fileSize });
 }));
 /**
  * @openapi
@@ -331,6 +420,19 @@ app.delete('/users/:id', validateId, wrap(async (req, res) => {
         return res.status(404).send({ message: 'Not found' });
     }
     return res.status(204).send();
+}));
+/**
+ * @openapi
+ * /uploads:
+ *   get:
+ *     summary: アップロード済みファイル一覧取得
+ *     responses:
+ *       200:
+ *         description: アップロード一覧
+ */
+app.get('/uploads', wrap(async (req, res) => {
+    const [rows] = await (await getPool()).query('SELECT id, user_id, filename, s3_key, file_size, created_at FROM uploads ORDER BY created_at DESC');
+    res.send(rows);
 }));
 app.use((err, req, res, _next) => {
     console.error(JSON.stringify({

@@ -305,13 +305,27 @@ app.post(
             }),
         )
 
-        // RDS に保存
-        await (await getPool()).query(
-            'INSERT INTO uploads (user_id, filename, s3_key, file_size) VALUES (?, ?, ?, ?)',
-            [user_id, filename, destKey, fileSize],
-        )
+        // RDS に保存。失敗時は temp と uploads/ の両方を削除してロールバックする。
+        try {
+            await (await getPool()).query(
+                'INSERT INTO uploads (user_id, filename, s3_key, file_size) VALUES (?, ?, ?, ?)',
+                [user_id, filename, destKey, fileSize],
+            )
+        } catch (e) {
+            // INSERT 失敗時は uploads/ にコピー済みのファイルと temp を両方削除する
+            await Promise.allSettled([
+                s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: destKey })),
+                s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })),
+            ])
+            console.error(JSON.stringify({ level: 'error', event: 'complete.insert_failed', key, error: String(e) }))
+            // 外部キー制約違反（user_id が存在しない）は 400、それ以外は 500
+            const isFK = e instanceof Error && e.message.includes('foreign key constraint')
+            return res.status(isFK ? 400 : 500).send({
+                message: isFK ? 'user_id does not exist' : 'Internal Server Error',
+            })
+        }
 
-        // 一時ファイルを削除（失敗しても成功扱い。ファイルは uploads/ に移動済み）
+        // 一時ファイルを削除（失敗しても成功扱い。ファイルは uploads/ に保存済み）
         await s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })).catch((e) =>
             console.error(JSON.stringify({ level: 'error', event: 'complete.delete_temp_failed', key, error: String(e) })),
         )
@@ -483,6 +497,26 @@ app.delete(
             return res.status(404).send({ message: 'Not found' })
         }
         return res.status(204).send()
+    }),
+)
+
+
+/**
+ * @openapi
+ * /uploads:
+ *   get:
+ *     summary: アップロード済みファイル一覧取得
+ *     responses:
+ *       200:
+ *         description: アップロード一覧
+ */
+app.get(
+    '/uploads',
+    wrap(async (req, res) => {
+        const [rows] = await (await getPool()).query(
+            'SELECT id, user_id, filename, s3_key, file_size, created_at FROM uploads ORDER BY created_at DESC',
+        )
+        res.send(rows)
     }),
 )
 
