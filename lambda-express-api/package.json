@@ -14,8 +14,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@aws-sdk/client-secrets-manager": "^3.1072.0",
     "@aws-sdk/credential-providers": "^3.1072.0",
+    "@aws-sdk/s3-request-presigner": "^3.1075.0",
     "express": "^5.2.1",
     "mysql2": "^3.22.5",
     "serverless-http": "^4.0.0",

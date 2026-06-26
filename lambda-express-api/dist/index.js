@@ -11,6 +11,8 @@ const swagger_ui_express_1 = __importDefault(require("swagger-ui-express"));
 const swagger_jsdoc_1 = __importDefault(require("swagger-jsdoc"));
 const client_secrets_manager_1 = require("@aws-sdk/client-secrets-manager");
 const credential_providers_1 = require("@aws-sdk/credential-providers");
+const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const app = (0, express_1.default)();
 const swaggerSpec = (0, swagger_jsdoc_1.default)({
     definition: {
@@ -25,6 +27,17 @@ const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 const client = new client_secrets_manager_1.SecretsManagerClient({
     region: 'ap-northeast-1',
     ...(isLambda ? {} : { credentials: (0, credential_providers_1.fromIni)({ profile: 'mvtk-refactoring' }) }),
+});
+// mp4 アップロード用 S3。presigned URL（署名付きアップロードURL）の発行に使う。
+// 発行自体はローカル計算で S3 への通信は発生しない。実アップロードはクライアントが
+// このURLへ直接 PUT する（API Gateway / Lambda を経由しない）。
+const UPLOAD_BUCKET = 'handson-mp4-upload-698031349306';
+const s3 = new client_s3_1.S3Client({
+    region: 'ap-northeast-1',
+    // ローカルは ~/.aws のプロファイル（AWS_PROFILE があればそれ、無ければ mvtk-refactoring）。
+    ...(isLambda
+        ? {}
+        : { credentials: (0, credential_providers_1.fromIni)({ profile: process.env.AWS_PROFILE ?? 'mvtk-refactoring' }) }),
 });
 const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 let pool;
@@ -138,6 +151,42 @@ app.use('/api-docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.de
  *         description: OK
  */
 app.get('/health', (req, res) => res.send({ status: 'ok' }));
+/**
+ * @openapi
+ * /uploads/presign:
+ *   post:
+ *     summary: mp4アップロード用の presigned URL を発行
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               filename:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: 署名付きアップロードURL
+ */
+app.post('/uploads/presign', wrap(async (req, res) => {
+    const filename = req.body?.filename;
+    if (!filename || typeof filename !== 'string' || !filename.trim()) {
+        return res.status(400).send({ message: 'filename is required' });
+    }
+    // S3 内での保存先（キー）。uploads/ 配下にまとめる。
+    const key = `uploads/${filename.trim()}`;
+    // 「このバケットに、このキーで、video/mp4 を PUT してよい」という許可。
+    const command = new client_s3_1.PutObjectCommand({
+        Bucket: UPLOAD_BUCKET,
+        Key: key,
+        ContentType: 'video/mp4',
+    });
+    // 300秒だけ有効な署名付き PUT URL。クライアントはこのURLへ直接アップロードする。
+    const url = await (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 });
+    console.log(JSON.stringify({ level: 'info', event: 'presign.issued', key }));
+    res.send({ url, key, expiresIn: 300 });
+}));
 /**
  * @openapi
  * /users:

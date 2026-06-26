@@ -3,3 +3,4 @@ dist
 cdk.out
 .cdk.staging
 *.d.ts
+video
