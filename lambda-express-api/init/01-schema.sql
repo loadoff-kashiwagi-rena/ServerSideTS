@@ -8,3 +8,13 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 INSERT INTO users (name) VALUES ('alice'), ('bob'), ('carol');
+
+CREATE TABLE IF NOT EXISTS uploads (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  user_id    INT           NOT NULL,
+  filename   VARCHAR(255)  NOT NULL,
+  s3_key     VARCHAR(512)  NOT NULL,
+  file_size  BIGINT        NOT NULL,
+  created_at TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);

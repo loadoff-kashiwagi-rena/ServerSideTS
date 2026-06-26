@@ -118,6 +118,22 @@ export class LambdaExpressApiStack extends Stack {
             }),
         )
 
+        // --- S3 権限 -------------------------------------------------------------
+        // /uploads/presign: PutObject の署名付き URL 発行（署名に実行ロールの権限が必要）
+        // /uploads/complete: HeadObject（メタデータ確認）→ CopyObject（temp→uploads）
+        //                    → DeleteObject（temp 削除）
+        fn.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: [
+                    's3:PutObject',
+                    's3:GetObject',
+                    's3:HeadObject',
+                    's3:DeleteObject',
+                ],
+                resources: [`arn:aws:s3:::handson-mp4-upload-${this.account}/*`],
+            }),
+        )
+
         // --- REST API (API Gateway) ---------------------------------------------
         // proxy: true で全メソッド/全パスを Lambda に流し、ルーティングは Express に任せる。
         const api = new apigateway.LambdaRestApi(this, 'Api', {
