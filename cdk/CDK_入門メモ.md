@@ -169,3 +169,50 @@ new CfnOutput(this, 'ApiUrl', {
   （ヒント：`environment` というオプションがある）
 - **【上級】** 今の構成に、**もう1つ別の Lambda（例：`HelloFn`）を追加**するとしたら、どんなコードを書く？
   （「型」を思い出して）
+
+---
+
+## ⚠️ これから書き足す前に押さえる3つの勘所
+
+2バケット構成やバリデーションを CDK に足す前に、ここだけは腹落ちさせておく。順に「効いてくる」ので上から。
+
+### 1. 署名する人の権限 ＝ 発行されるURLの権限（presign の核）
+
+`/uploads/presign` は「アップロード用の署名付きURL」を発行する。ここで勘違いしやすいのが——
+
+- アップロードの **PUT 自体はクライアント → S3 直行**で、Lambda は通らない。
+- **でも、その署名付きURLが“何をできるか”は、署名した人（＝Lambda 実行ロール）の IAM 権限で決まる。**
+- だから **Lambda ロールに `s3:PutObject` が無いと、発行したURLでPUTしても拒否される。**
+
+→ これが `lib/lambda-express-api-stack.ts` で `s3:PutObject` を付けている理由。
+**「URLを作る側に権限が要る。使う側（クライアント）はそのURLを持つだけ」** と覚える。
+2バケットにしたら、**presign の発行先（バリデーション前S3）に対して PutObject** を付ける、という対応関係になる。
+
+### 2. ステートフル資源（S3/RDS）の「置換」を踏まない
+
+S3 や RDS は**中にデータを持つ**。CloudFormation は、ある種のプロパティを変えると
+**「置換（＝古いものを消して新しく作り直す）」**を実行する。これをやると**中身（mp4 等）が失われる**。
+
+防御は3つ：
+
+1. <ruby>論理<rt>ろんり</rt></ruby>ID（<ruby>construct<rt>コンストラクト</rt></ruby> id。`new s3.Bucket(this, 'ここの名前', ...)` の `'ここの名前'`）を**変えない**
+2. <ruby>RemovalPolicy<rt>リムーバルポリシー</rt></ruby>.<ruby>RETAIN<rt>リテイン</rt></ruby>（スタック削除時もリソースを**残す**）
+3. <ruby>immutable<rt>イミュータブル</rt></ruby>なプロパティ（`bucketName` 等）を**後から変えない**
+
+→ 2バケットを足すときは、最初から `removalPolicy: RETAIN` と**安定した論理ID**で書き始める。
+**`cdk diff` で「Replace」と出ていないか必ず目視**してからデプロイ。
+
+### 3. VPC 内 Lambda が外のサービスへ届く「経路」
+
+このスタックの Lambda は **VPC の中**にいる（RDS Proxy が VPC 内のため）。
+VPC 内から S3 や Secrets Manager に届くには、**経路**が要る。
+
+- **NAT Gateway 経由**：プライベートサブネット → NAT → AWS の API。← 現状これ（`LAMBDA_SUBNET_IDS` のコメント参照）。
+- **VPC エンドポイント経由**：VPC 内に専用の入口を置き、外に出ずに到達。
+  - **S3 → Gateway 型エンドポイント**：**無料**・NAT を通らない（NAT のデータ処理料を節約）・インターネットに出ないので安全。**最初に入れる候補。**
+  - **Secrets Manager → Interface 型エンドポイント**（or NAT のまま）。
+
+→ S3 操作（presign 署名・HeadObject・CopyObject・DeleteObject）を足すなら、**S3 Gateway VPC エンドポイント**を一緒に入れておくと素直。
+
+> まとめ：**①権限＝URLの力 / ②置換を踏まない / ③VPCからの経路**。
+> この3つが分かっていれば、「2バケット＋RemovalPolicy＋CORS＋ライフサイクル＋バケットポリシー(aws:SourceIp)＋バケット別IAM」を安全に足せる。
