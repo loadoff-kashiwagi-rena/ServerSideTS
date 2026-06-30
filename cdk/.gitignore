@@ -3,3 +3,9 @@ node_modules
 cdk.out
 .cdk.staging
 deploy.sh
+
+# 環境変数（バケット名など。example のみコミットする）
+.env
+
+# CloudFront 署名URL用の鍵ペア（秘密鍵は絶対にコミットしない）
+keys/

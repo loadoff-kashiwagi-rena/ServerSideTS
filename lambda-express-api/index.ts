@@ -144,7 +144,6 @@ function validateId(req: Request, res: Response, next: NextFunction) {
 
 app.use(express.json())
 
-
 // CORS: 別オリジン（mitai の Nuxt 開発サーバ）からの呼び出しを許可する。
 // 検証用にローカルの Nuxt(http://localhost:3001) のみ許可。本番では実オリジンに置き換える。
 const ALLOWED_ORIGIN = 'http://localhost:3001'
@@ -287,13 +286,21 @@ app.post(
         // バリデーション失敗時は temp を削除してから 400 を返す
         if (fileSize === 0 || fileSize > MAX_FILE_SIZE) {
             await s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key }))
-            console.log(JSON.stringify({ level: 'warn', event: 'complete.invalid_size', key, fileSize }))
-            return res.status(400).send({ message: `file size invalid (got ${fileSize} bytes, max ${MAX_FILE_SIZE})` })
+            console.log(
+                JSON.stringify({ level: 'warn', event: 'complete.invalid_size', key, fileSize }),
+            )
+            return res.status(400).send({
+                message: `file size invalid (got ${fileSize} bytes, max ${MAX_FILE_SIZE})`,
+            })
         }
         if (contentType !== 'video/mp4') {
             await s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key }))
-            console.log(JSON.stringify({ level: 'warn', event: 'complete.invalid_type', key, contentType }))
-            return res.status(400).send({ message: `content type must be video/mp4 (got ${contentType})` })
+            console.log(
+                JSON.stringify({ level: 'warn', event: 'complete.invalid_type', key, contentType }),
+            )
+            return res
+                .status(400)
+                .send({ message: `content type must be video/mp4 (got ${contentType})` })
         }
 
         // 本番領域（uploads/）へコピー
@@ -307,7 +314,9 @@ app.post(
 
         // RDS に保存。失敗時は temp と uploads/ の両方を削除してロールバックする。
         try {
-            await (await getPool()).query(
+            await (
+                await getPool()
+            ).query(
                 'INSERT INTO uploads (user_id, filename, s3_key, file_size) VALUES (?, ?, ?, ?)',
                 [user_id, filename, destKey, fileSize],
             )
@@ -317,7 +326,14 @@ app.post(
                 s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: destKey })),
                 s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })),
             ])
-            console.error(JSON.stringify({ level: 'error', event: 'complete.insert_failed', key, error: String(e) }))
+            console.error(
+                JSON.stringify({
+                    level: 'error',
+                    event: 'complete.insert_failed',
+                    key,
+                    error: String(e),
+                }),
+            )
             // 外部キー制約違反（user_id が存在しない）は 400、それ以外は 500
             const isFK = e instanceof Error && e.message.includes('foreign key constraint')
             return res.status(isFK ? 400 : 500).send({
@@ -327,7 +343,14 @@ app.post(
 
         // 一時ファイルを削除（失敗しても成功扱い。ファイルは uploads/ に保存済み）
         await s3.send(new DeleteObjectCommand({ Bucket: UPLOAD_BUCKET, Key: key })).catch((e) =>
-            console.error(JSON.stringify({ level: 'error', event: 'complete.delete_temp_failed', key, error: String(e) })),
+            console.error(
+                JSON.stringify({
+                    level: 'error',
+                    event: 'complete.delete_temp_failed',
+                    key,
+                    error: String(e),
+                }),
+            ),
         )
 
         console.log(JSON.stringify({ level: 'info', event: 'complete.success', destKey, fileSize }))
@@ -500,7 +523,6 @@ app.delete(
     }),
 )
 
-
 /**
  * @openapi
  * /uploads:
@@ -513,7 +535,9 @@ app.delete(
 app.get(
     '/uploads',
     wrap(async (req, res) => {
-        const [rows] = await (await getPool()).query(
+        const [rows] = await (
+            await getPool()
+        ).query(
             'SELECT id, user_id, filename, s3_key, file_size, created_at FROM uploads ORDER BY created_at DESC',
         )
         res.send(rows)
