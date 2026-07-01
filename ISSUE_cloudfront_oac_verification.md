@@ -59,6 +59,18 @@ CloudFront + OAC 方式は「全リクエストが CloudFront を通る」ため
 - [ ] 検証結果を `lambda-express-api/技術検証.md` に追記
 - [ ] データ量確定後、コスト試算 vs セキュリティ便益で採否を判断
 
+#### メモ: 検証スクリプト構成と API化との違い（2026-07-01）
+
+- 検証は使い捨て構成でOK: `cdk/scripts/sign-url.ts`（`@aws-sdk/cloudfront-signer`
+  + `node:util parseArgs`, `ts-node`実行）＋ ローカル鍵 `keys/cf_private_key.pem` を `readFileSync`。
+  引数で `domain`/`keyPairId`/`path` を渡す。検証後スクリプトは消す方針。
+- **API化するなら設計が別物（スクリプトは流用不可）**:
+  - 秘密鍵はリポジトリ/バンドルに入れない → Secrets Manager or SSM(SecureString)+KMS、Lambda ロールに読取IAM。
+  - 署名は `lambda-express-api` 側でリクエスト毎に動的生成。発行APIに**認証・認可**必須。
+  - オブジェクトキーはユーザー単位プレフィックス（任意キー署名を防ぐ）。
+  - `KeyGroup` に複数鍵で無停止ローテーション。`PublicKeyId`/`domain` は env or SSM で連携。
+  - 本番トラフィックが全て CloudFront 経由 → データ転送料が本番規模で発生（採否判断の対象）。
+
 ## 受け入れ条件
 
 - 署名付きURL経由の PUT / GET が CloudFront を通って成功する
