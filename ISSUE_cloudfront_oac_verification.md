@@ -44,20 +44,17 @@ CloudFront + OAC 方式は「全リクエストが CloudFront を通る」ため
 - [x] `cdk/bin/app.ts` に `.env` ローダと OACスタック登録（`OAC_VERIFY_BUCKET` が未設定/`xxxxx` 含む時はスキップ）
 - [x] `tsc --noEmit`（exit0）/ `cdk synth CloudFrontOacStack --exclusively`（exit0）で生成テンプレートを検証
 
-### デプロイ・実機検証（未実施）
+### デプロイ・実機検証（完了 2026-07-01）
 
-- [ ] `cdk/.env` の `OAC_VERIFY_BUCKET` を一意な名前に設定して `cdk deploy CloudFrontOacStack`
-- [ ] 署名付きURL生成スクリプトを作成（秘密鍵で署名し PUT/GET URL を発行）
-- [ ] CloudFront 経由の **PUT** が成功し、S3 にオブジェクトが保存されることを確認
-- [ ] CloudFront 経由の **GET** で保存オブジェクトを取得できることを確認
-- [ ] **無署名 / 署名切れ** のリクエストが 403 になることを確認
-- [ ] **S3 への直アクセス**（CloudFront を介さない）が拒否されることを確認（OAC が効いている証明）
-- [ ] （任意）マルチパートアップロード（`uploads` / `uploadId` / `partNumber`）が通ることを確認
+- [x] `cdk deploy` → 署名URL生成（`cdk/scripts/sign-url.ts`）→ 実機検証 → `cdk destroy`（課金停止）まで実施
+- [x] 署名URL経由の PUT / GET 成功、無署名・署名切れ 403、S3 直アクセス 403（OAC証明）を確認
+- [x] mp4（29MB）の保存・取得、マルチパートアップロード（自作 `cdk/scripts/multipart-upload.ts`・3パート）も md5 一致で確認
+- 詳細な結果は `lambda-express-api/技術検証.md` の「【技術検証】CloudFront署名付きURL + OAC の実機検証」節に記録済み。
 
 ### 判断・記録
 
-- [ ] 検証結果を `lambda-express-api/技術検証.md` に追記
-- [ ] データ量確定後、コスト試算 vs セキュリティ便益で採否を判断
+- [x] 検証結果を `lambda-express-api/技術検証.md` に追記
+- [ ] データ量確定後、コスト試算 vs セキュリティ便益で採否を判断（← 残る唯一のオープン項目）
 
 #### メモ: 検証スクリプト構成と API化との違い（2026-07-01）
 
@@ -77,50 +74,3 @@ CloudFront + OAC 方式は「全リクエストが CloudFront を通る」ため
 - 無署名・署名切れのリクエストは 403 で拒否される
 - S3 への直アクセスは拒否され、CloudFront(OAC) 経由のみアクセスできる
 - 既存の Presigned URL 構成（LambdaExpressApiStack）に影響を与えない
-
-## 補足（検証環境の既知の注意点）
-
-- ローカルは Docker 未起動 ＆ 既存 build スクリプトが `tsgo -p`（引数不足）でこけるため、
-  `LambdaExpressApiStack` のアセットバンドルが synth 時に失敗する。OAC 検証には無関係で、
-  `cdk synth CloudFrontOacStack --exclusively` で回避できる。
-
----
-
-## 再開手順（2026-06-30 中断・別PCで再開する用）
-
-ブランチ `feature/cloudfront-oac-investigation` で作業中。CDK は synth まで完了し、ここで中断。
-**deploy 前の状態**なので、別PCでは鍵を作り直してOK（公開鍵はまだ AWS 未登録）。
-
-### git で渡るもの（commit + push 済み前提）
-- `cdk/lib/cloudfront-oac-stack.ts`、`cdk/bin/app.ts`、本ファイル
-
-### git に乗らない＝別PCで再作成が必要（gitignore 済み）
-| 物 | 別PCでの再作成 |
-|---|---|
-| `cdk/.env` | `cp cdk/.env.example cdk/.env` → `OAC_VERIFY_BUCKET=handson-cloudfront-oac-verify-20260630` |
-| `cdk/keys/cf_*.pem` | 下記 openssl で新規生成（秘密鍵はコピーしない方が安全） |
-| `cdk/node_modules` | `cd cdk && npm ci` |
-| AWS 認証情報 | `aws configure`（リージョンは **ap-northeast-1** 固定。bootstrap 要確認） |
-
-### 別PCでの再開コマンド
-```bash
-git pull            # feature/cloudfront-oac-investigation を checkout
-cd cdk && npm ci
-
-cp .env.example .env   # OAC_VERIFY_BUCKET=handson-cloudfront-oac-verify-20260630 に編集
-mkdir -p keys
-openssl genrsa -out keys/cf_private_key.pem 2048
-openssl rsa -pubout -in keys/cf_private_key.pem -out keys/cf_public_key.pem
-
-aws configure          # region=ap-northeast-1
-npx tsc --noEmit
-npx cdk synth CloudFrontOacStack --exclusively   # ここまで通れば中断前と同じ状態
-```
-
-### 中断時点の残タスク（順番）
-1. **STEP6 署名URL生成スクリプト**（AWS不要・先に書ける）: `@aws-sdk/cloudfront-signer` の `getSignedUrl` を使い、
-   `cdk/keys/cf_private_key.pem` + deploy 出力の `PublicKeyId` で PUT/GET 用署名URLを発行。
-2. **deploy**: `npx cdk deploy CloudFrontOacStack --exclusively`（出力の `DistributionDomainName` / `PublicKeyId` を控える）。
-3. **実機検証**: 署名PUT/GET 成功・無署名/期限切れ 403・S3 直アクセス拒否（OAC証明）。
-4. **削除**: `npx cdk destroy CloudFrontOacStack --exclusively`（CloudFront は起動中ずっと課金。検証後すぐ削除する）。
-5. 結果を `lambda-express-api/技術検証.md` に追記。
