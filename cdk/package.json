@@ -10,7 +10,8 @@
     "diff": "cdk diff",
     "deploy": "cdk deploy",
     "destroy": "cdk destroy",
-    "bootstrap": "cdk bootstrap"
+    "bootstrap": "cdk bootstrap",
+    "sign": "ts-node scripts/sign-url.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -19,6 +20,7 @@
     "typescript": "~5.6.3"
   },
   "dependencies": {
+    "@aws-sdk/cloudfront-signer": "^3.1077.0",
     "aws-cdk-lib": "^2.170.0",
     "constructs": "^10.4.2"
   }
