@@ -11,7 +11,8 @@
     "deploy": "cdk deploy",
     "destroy": "cdk destroy",
     "bootstrap": "cdk bootstrap",
-    "sign": "ts-node scripts/sign-url.ts"
+    "sign": "ts-node scripts/sign-url.ts",
+     "mp": "ts-node scripts/multipart-upload.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
