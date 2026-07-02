@@ -74,3 +74,6 @@ CloudFront + OAC 方式は「全リクエストが CloudFront を通る」ため
 - 無署名・署名切れのリクエストは 403 で拒否される
 - S3 への直アクセスは拒否され、CloudFront(OAC) 経由のみアクセスできる
 - 既存の Presigned URL 構成（LambdaExpressApiStack）に影響を与えない
+
+
+Lambda はデフォルトでは、サーバー単体なのでプライベートネットワーク（VPC）は関係ない。VPC内では ENI（プライベートIP）しか保持できないため、IGW はパブリックIPを持つ通信しか通さないので、Secrets Manager と接続することができない。Lambda→NAT の順で IGW に出られるようになる。この時 NAT が自分のパブリックIP（EIP）を送信元として貸す（肩代わりする）ので、パブリックIPを持たない Lambda でも IGW を通れるようになる。これで Secrets Manager を参照できる。
