@@ -56,6 +56,66 @@ Lambda → S3:CompleteMultipartUpload（★これが引き金で S3 が結合＝
 
 ---
 
+## データの流れ（シーケンス図）
+
+上の「正しいフロー全体」を図にしたもの。**②の転送だけ API Gateway / Lambda を通らず、クライアント → CloudFront → S3 に直行する**のが最大のポイント。
+
+> ⚠️ 注意：①でLambdaがCloudFront署名付きURLを発行するのは **OAC方式を採用した場合の設計**。**現状の実装では未対応**で、CloudFront署名の生成は検証用CLI（`cdk/scripts/sign-url.ts`）が担当している。本番Lambda（`index.ts`）が今発行しているのは **S3 Presigned URL**（`@aws-sdk/s3-request-presigner`）であって CloudFront署名ではない。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as クライアント
+    participant AG as API Gateway
+    participant L as Lambda
+    participant CF as CloudFront
+    participant S3a as S3（バリデーション前 / temp）
+    participant S3b as S3（バリデーション後 / uploads）
+    participant DB as RDS（Proxy 経由）
+
+    Note over C,DB: ① URL発行（S3へのURL発行依頼はしない）
+    C->>AG: URL発行リクエスト
+    AG->>L: 転送
+    opt マルチパートの場合
+        L->>S3a: CreateMultipartUpload
+        S3a-->>L: UploadId
+    end
+    Note right of L: 手元のRSA秘密鍵で<br/>CloudFront署名付きURLを生成<br/>（S3への通信なし）<br/>※OAC採用時の設計。現状は<br/>検証CLI（scripts/sign-url.ts）で代替
+    L-->>C: 署名付きURL（＋UploadId）
+
+    Note over C,DB: ② 転送（★API Gateway を通らない別経路）
+    C->>CF: 署名付きURLで PUT（各パート）
+    Note right of CF: trustedKeyGroups で署名検証<br/>→ OAC(SigV4) を内部で付与
+    CF->>S3a: PUT パート
+    S3a-->>CF: ETag
+    CF-->>C: ETag
+    C->>AG: ETag一覧 [{PartNumber, ETag}...]
+    AG->>L: 転送
+    L->>S3a: CompleteMultipartUpload（★S3が結合＝再構築）
+
+    Note over C,DB: ③ 検証〜保存（complete 1回で完結）
+    C->>AG: POST /uploads/complete
+    AG->>L: 転送
+    L->>S3a: HeadObject（サイズ/Content-Type 検証）
+    alt 検証NG
+        L->>S3a: DeleteObject
+        L-->>C: 400
+    else 検証OK
+        L->>S3b: CopyObject（temp → uploads）
+        L->>DB: INSERT
+        alt INSERT失敗（補償処理）
+            L->>S3b: DeleteObject（コピー済みを削除）
+            L->>S3a: DeleteObject（前も削除）
+            L-->>C: 500
+        else 成功
+            L->>S3a: DeleteObject（RDS保存の"後"に削除）
+            L-->>C: 201
+        end
+    end
+```
+
+---
+
 ## 細かいが落としやすい点
 
 - **削除の順番**：temp（バリデーション前）の削除は **RDS INSERT の後**。コピー直後ではない。
